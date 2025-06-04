@@ -1,33 +1,66 @@
 version: "1.0"
 specification:
-  name: connectorname
-  summary: A brief description of your connector.
+  name: arxiv
+  summary: A source connector for fetching papers from arXiv based on search queries.
   description: |-
-    This is a detailed description of your connector.
+    The arXiv connector fetches academic papers from the arXiv API based on configurable search queries.
 
-    It can contain information about the features and limitations of the connector, usage instructions, etc.
+    It supports filtering by categories, date ranges, and search terms. The connector can fetch paper metadata
+    and optionally download PDF files. It's designed to work with arXiv's REST API and handles pagination
+    and rate limiting automatically.
 
-    By default, it's inserted into the README file and Markdown syntax can be used.
-  version: v0.0.1
-  author: Your Name
+    Features:
+    - Search by keywords, categories, and authors
+    - Configurable polling intervals
+    - PDF download support
+    - Metadata extraction (title, abstract, authors, categories)
+    - Position tracking for incremental updates
+  version: v0.1.0
+  author: Raul Barroso
   source:
     parameters:
-      - name: global_config_param_name
-        description: |-
-          GlobalConfigParam is named global_config_param_name and needs to be
-          provided by the user.
+      - name: search_query
+        description: SearchQuery is the arXiv search query (e.g., "ti:\"AI\" AND cat:cs.AI")
         type: string
         default: ""
         validations:
           - type: required
             value: ""
-      - name: sourceConfigParam
-        description: SourceConfigParam must be provided by the user.
+      - name: arxiv_api_url
+        description: ArxivAPIURL is the base URL for the arXiv API
         type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
+        default: https://export.arxiv.org/api/query
+        validations: []
+      - name: filter_last_24_hours
+        description: FilterLast24Hours only fetches papers from the last 24 hours
+        type: bool
+        default: "false"
+        validations: []
+      - name: include_pdf
+        description: IncludePDF determines if PDF URLs should be included in the output
+        type: bool
+        default: "true"
+        validations: []
+      - name: max_results
+        description: 'MaxResults is the maximum number of results to fetch per request (default: 100)'
+        type: int
+        default: "100"
+        validations: []
+      - name: polling_period
+        description: PollingPeriod is how often to poll for new papers
+        type: duration
+        default: 1h
+        validations: []
+      - name: sort_by
+        description: SortBy determines how to sort results (submittedDate, lastUpdatedDate, relevance)
+        type: string
+        default: submittedDate
+        validations: []
+      - name: sort_order
+        description: SortOrder determines sort order (ascending, descending)
+        type: string
+        default: descending
+        validations: []
       - name: sdk.batch.delay
         description: Maximum delay before an incomplete batch is read from the source.
         type: duration
@@ -88,76 +121,3 @@ specification:
         validations:
           - type: inclusion
             value: avro
-  destination:
-    parameters:
-      - name: global_config_param_name
-        description: |-
-          GlobalConfigParam is named global_config_param_name and needs to be
-          provided by the user.
-        type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
-      - name: destinationConfigParam
-        description: DestinationConfigParam must be either yes or no (defaults to yes).
-        type: string
-        default: "yes"
-        validations:
-          - type: inclusion
-            value: yes,no
-      - name: sdk.batch.delay
-        description: Maximum delay before an incomplete batch is written to the destination.
-        type: duration
-        default: "0"
-        validations: []
-      - name: sdk.batch.size
-        description: Maximum size of batch before it gets written to the destination.
-        type: int
-        default: "0"
-        validations:
-          - type: greater-than
-            value: "-1"
-      - name: sdk.rate.burst
-        description: |-
-          Allow bursts of at most X records (0 or less means that bursts are not
-          limited). Only takes effect if a rate limit per second is set. Note that
-          if `sdk.batch.size` is bigger than `sdk.rate.burst`, the effective batch
-          size will be equal to `sdk.rate.burst`.
-        type: int
-        default: "0"
-        validations:
-          - type: greater-than
-            value: "-1"
-      - name: sdk.rate.perSecond
-        description: Maximum number of records written per second (0 means no rate limit).
-        type: float
-        default: "0"
-        validations:
-          - type: greater-than
-            value: "-1"
-      - name: sdk.record.format
-        description: |-
-          The format of the output record. See the Conduit documentation for a full
-          list of supported formats (https://conduit.io/docs/using/connectors/configuration-parameters/output-format).
-        type: string
-        default: opencdc/json
-        validations: []
-      - name: sdk.record.format.options
-        description: |-
-          Options to configure the chosen output record format. Options are normally
-          key=value pairs separated with comma (e.g. opt1=val2,opt2=val2), except
-          for the `template` record format, where options are a Go template.
-        type: string
-        default: ""
-        validations: []
-      - name: sdk.schema.extract.key.enabled
-        description: Whether to extract and decode the record key with a schema.
-        type: bool
-        default: "true"
-        validations: []
-      - name: sdk.schema.extract.payload.enabled
-        description: Whether to extract and decode the record payload with a schema.
-        type: bool
-        default: "true"
-        validations: []
