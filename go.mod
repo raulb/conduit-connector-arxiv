@@ -1,4 +1,4 @@
-module github.com/conduitio/conduit-connector-connectorname
+module github.com/raulb/conduit-connector-arxiv
 
 go 1.24.2
 
@@ -6,6 +6,7 @@ require (
 	github.com/conduitio/conduit-commons v0.5.4
 	github.com/conduitio/conduit-connector-sdk v0.14.0
 	github.com/matryer/is v1.4.1
+	golang.org/x/time v0.11.0
 )
 
 require (
@@ -217,7 +218,6 @@ require (
 	golang.org/x/sync v0.14.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
 	golang.org/x/tools v0.33.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250219182151-9fdb1cabc7b2 // indirect
 	google.golang.org/grpc v1.72.2 // indirect

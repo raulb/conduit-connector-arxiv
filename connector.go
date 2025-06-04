@@ -1,6 +1,6 @@
 //go:generate conn-sdk-cli specgen
 
-package connectorname
+package arxiv
 
 import (
 	_ "embed"
@@ -16,5 +16,4 @@ var version = "(devel)"
 var Connector = sdk.Connector{
 	NewSpecification: sdk.YAMLSpecification(specs, version),
 	NewSource:        NewSource,
-	NewDestination:   NewDestination,
 }
