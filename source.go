@@ -17,14 +17,44 @@ import (
 
 // ArxivEntry represents a single paper entry from arXiv
 type ArxivEntry struct {
-	ID        string    `xml:"id"`
-	Title     string    `xml:"title"`
-	Summary   string    `xml:"summary"`
-	Authors   []Author  `xml:"author"`
-	Published time.Time `xml:"published"`
-	Updated   time.Time `xml:"updated"`
-	Links     []Link    `xml:"link"`
+	ID        string     `xml:"id"`
+	Title     string     `xml:"title"`
+	Summary   string     `xml:"summary"`
+	Authors   []Author   `xml:"author"`
+	Published time.Time  `xml:"published"`
+	Updated   time.Time  `xml:"updated"`
+	Links     []Link     `xml:"link"`
 	Category  []Category `xml:"category"`
+}
+
+func (e *ArxivEntry) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	type Alias ArxivEntry
+	tmp := &struct {
+		Published string `xml:"published"`
+		Updated   string `xml:"updated"`
+		*Alias
+	}{Alias: (*Alias)(e)}
+	if err := d.DecodeElement(tmp, &start); err != nil {
+		return err
+	}
+	var err error
+	e.Published, err = time.Parse(time.RFC3339, tmp.Published)
+	if err != nil {
+		// Try parsing without timezone (arXiv sometimes omits 'Z')
+		e.Published, err = time.Parse("2006-01-02T15:04:05", tmp.Published)
+		if err != nil {
+			return fmt.Errorf("failed to parse published date: %w", err)
+		}
+	}
+	e.Updated, err = time.Parse(time.RFC3339, tmp.Updated)
+	if err != nil {
+		// Try parsing without timezone
+		e.Updated, err = time.Parse("2006-01-02T15:04:05", tmp.Updated)
+		if err != nil {
+			return fmt.Errorf("failed to parse updated date: %w", err)
+		}
+	}
+	return nil
 }
 
 type Author struct {
@@ -44,16 +74,16 @@ type Category struct {
 
 // ArxivFeed represents the XML response from arXiv API
 type ArxivFeed struct {
-	XMLName xml.Name     `xml:"feed"`
-	Entries []ArxivEntry `xml:"entry"`
-	Title   string       `xml:"title"`
+	XMLName xml.Name      `xml:"feed"`
+	Entries []*ArxivEntry `xml:"entry"`
+	Title   string        `xml:"title"`
 }
 
 type Source struct {
 	sdk.UnimplementedSource
 
-	config SourceConfig
-	client *http.Client
+	config  SourceConfig
+	client  *http.Client
 	limiter *rate.Limiter
 
 	buffer       []opencdc.Record
@@ -103,7 +133,7 @@ func (s *SourceConfig) Validate(ctx context.Context) error {
 	}
 
 	validSortBy := map[string]bool{
-		"submittedDate":    true,
+		"submittedDate":   true,
 		"lastUpdatedDate": true,
 		"relevance":       true,
 	}
@@ -182,7 +212,7 @@ func (s *Source) fillBuffer(ctx context.Context) error {
 	sdk.Logger(ctx).Debug().Msg("filling buffer with arXiv entries")
 
 	// Build arXiv API URL
-	apiURL, err := s.config.buildArxivURL(
+	apiURL, err := s.config.BuildArxivURL(
 		s.config.SearchQuery,
 		s.config.SortBy,
 		s.config.SortOrder,
@@ -228,13 +258,13 @@ func (s *Source) fillBuffer(ctx context.Context) error {
 	for i, entry := range feed.Entries {
 		// Apply 24-hour filter if enabled
 		if s.config.FilterLast24Hours {
-			twentyFourHoursAgo := time.Now().Add(-24 * time.Hour)
+			twentyFourHoursAgo := time.Now().UTC().Add(-24 * time.Hour)
 			if entry.Published.Before(twentyFourHoursAgo) {
 				continue
 			}
 		}
 
-		rec, err := s.entryToRecord(entry, s.offset+i)
+		rec, err := s.entryToRecord(*entry, s.offset+i)
 		if err != nil {
 			return fmt.Errorf("failed to convert entry to record: %w", err)
 		}

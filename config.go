@@ -13,8 +13,8 @@ type Config struct {
 	ArxivAPIURL string `json:"arxiv_api_url" default:"https://export.arxiv.org/api/query"`
 }
 
-// buildArxivURL constructs the arXiv API URL with the given parameters
-func (c Config) buildArxivURL(searchQuery, sortBy, sortOrder string, start, maxResults int) (string, error) {
+// BuildArxivURL constructs the arXiv API URL with the given parameters
+func (c Config) BuildArxivURL(searchQuery, sortBy, sortOrder string, start, maxResults int) (string, error) {
 	baseURL, err := url.Parse(c.ArxivAPIURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid arXiv API URL: %w", err)
