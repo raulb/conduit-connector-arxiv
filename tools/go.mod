@@ -1,4 +1,4 @@
-module github.com/conduitio/conduit-connector-connectorname/tools
+module github.com/raulb/conduit-connector-arxiv/tools
 
 go 1.24.2
 
