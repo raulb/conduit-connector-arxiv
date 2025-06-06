@@ -423,6 +423,164 @@ func TestSource_PositionHandling(t *testing.T) {
 	is.NoErr(err)
 }
 
+func TestSource_InitialFetchVsMonitoring(t *testing.T) {
+	is := is.New(t)
+	ctx := context.Background()
+
+	// Create a server that returns data only on the first request
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		if callCount == 1 {
+			// First call: return data
+			fmt.Fprintln(w, mockArxivResponse)
+		} else {
+			// Subsequent calls: return empty feed
+			fmt.Fprintln(w, `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+</feed>`)
+		}
+	}))
+	defer server.Close()
+
+	src := arxiv.NewSource()
+	err := sdk.Util.ParseConfig(ctx, map[string]string{
+		"arxiv_api_url":                      server.URL,
+		"search_query":                       "AI",
+		"polling_period":                     "5s", // Long polling period
+		"sdk.schema.extract.payload.enabled": "false",
+	}, src.Config(), arxiv.Connector.NewSpecification().SourceParams)
+	is.NoErr(err)
+
+	err = src.Open(ctx, nil)
+	is.NoErr(err)
+
+	// First read should be immediate (no rate limiting)
+	start := time.Now()
+	rec1, err := src.Read(ctx)
+	duration1 := time.Since(start)
+	is.NoErr(err)
+	is.True(duration1 < time.Second) // Should be very fast
+
+	// Second read should return ErrBackoffRetry since buffer is empty
+	// and server returns no new data
+	start = time.Now()
+	_, err = src.Read(ctx)
+	duration2 := time.Since(start)
+	is.Equal(err, sdk.ErrBackoffRetry)
+	is.True(duration2 < time.Second) // Should be immediate since buffer is empty
+
+	// Verify the record content
+	data, ok := rec1.Payload.After.(opencdc.StructuredData)
+	is.True(ok)
+	is.Equal(data["title"], "Sample Title")
+
+	// Verify that we've switched from initial fetch to monitoring mode
+	// This is indicated by the fact that the second call waited for rate limiter
+	is.Equal(callCount, 2) // Should have made 2 API calls
+}
+
+func TestSource_IncrementalFetching(t *testing.T) {
+	is := is.New(t)
+	ctx := context.Background()
+
+	// Create responses with different timestamps
+	newPaper := `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.22222v1</id>
+    <title>New Paper</title>
+    <summary>New Summary</summary>
+    <author><name>Author Two</name></author>
+    <published>2025-06-06T00:00:00Z</published>
+    <updated>2025-06-06T00:00:00Z</updated>
+  </entry>
+</feed>`
+
+	bothPapers := `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.11111v1</id>
+    <title>Old Paper</title>
+    <summary>Old Summary</summary>
+    <author><name>Author One</name></author>
+    <published>2025-06-01T00:00:00Z</published>
+    <updated>2025-06-01T00:00:00Z</updated>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2401.22222v1</id>
+    <title>New Paper</title>
+    <summary>New Summary</summary>
+    <author><name>Author Two</name></author>
+    <published>2025-06-06T00:00:00Z</published>
+    <updated>2025-06-06T00:00:00Z</updated>
+  </entry>
+</feed>`
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		switch callCount {
+		case 1:
+			// First call: return both papers (initial fetch)
+			fmt.Fprintln(w, bothPapers)
+		case 2:
+			// Second call: return only new paper (should be filtered)
+			fmt.Fprintln(w, newPaper)
+		default:
+			// Subsequent calls: return empty feed
+			fmt.Fprintln(w, `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+</feed>`)
+		}
+	}))
+	defer server.Close()
+
+	src := arxiv.NewSource()
+	err := sdk.Util.ParseConfig(ctx, map[string]string{
+		"arxiv_api_url":                      server.URL,
+		"search_query":                       "AI",
+		"polling_period":                     "100ms",
+		"sdk.schema.extract.payload.enabled": "false",
+	}, src.Config(), arxiv.Connector.NewSpecification().SourceParams)
+	is.NoErr(err)
+
+	err = src.Open(ctx, nil)
+	is.NoErr(err)
+
+	// First read should get the old paper
+	rec1, err := src.Read(ctx)
+	is.NoErr(err)
+	data1, ok := rec1.Payload.After.(opencdc.StructuredData)
+	is.True(ok)
+	is.Equal(data1["title"], "Old Paper")
+
+	// Second read should get the new paper
+	rec2, err := src.Read(ctx)
+	is.NoErr(err)
+	data2, ok := rec2.Payload.After.(opencdc.StructuredData)
+	is.True(ok)
+	is.Equal(data2["title"], "New Paper")
+
+	// Third read should trigger second API call but return ErrBackoffRetry
+	// because the new paper was already seen
+	_, err = src.Read(ctx)
+	is.Equal(err, sdk.ErrBackoffRetry)
+
+	// Verify we made the expected number of API calls
+	is.Equal(callCount, 2)
+}
+
 func TestTeardownSource_NoOpen(t *testing.T) {
 	is := is.New(t)
 	con := arxiv.NewSource()

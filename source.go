@@ -82,13 +82,15 @@ type ArxivFeed struct {
 type Source struct {
 	sdk.UnimplementedSource
 
-	config  SourceConfig
-	client  *http.Client
-	limiter *rate.Limiter
-
+	config       SourceConfig
+	client       *http.Client
+	limiter      *rate.Limiter
 	buffer       []opencdc.Record
-	lastPosition opencdc.Position
 	offset       int
+	lastPosition opencdc.Position
+	initialFetch bool            // true if we're still in initial fetch phase
+	lastSeenDate time.Time       // track the latest publication/update date we've seen
+	seenPaperIDs map[string]bool // track paper IDs we've already processed
 }
 
 type SourceConfig struct {
@@ -178,21 +180,47 @@ func (s *Source) Open(ctx context.Context, pos opencdc.Position) error {
 	}
 
 	s.lastPosition = pos
+	s.initialFetch = true // Start in initial fetch mode
+	s.seenPaperIDs = make(map[string]bool)
+
+	// If we have a position, we're resuming from a previous state
+	// In CDC mode, we should start monitoring from the last seen date
+	if len(pos) > 0 {
+		// For now, we'll start fresh on resume, but in a production system
+		// you'd want to persist and restore the lastSeenDate and seenPaperIDs
+		s.lastSeenDate = time.Now().Add(-24 * time.Hour) // Look back 24 hours on resume
+	} else {
+		// Starting fresh - set lastSeenDate to zero so we fetch all available papers initially
+		s.lastSeenDate = time.Time{}
+	}
+
 	return nil
 }
 
 func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
 	if len(s.buffer) == 0 {
-		// Wait for rate limiter
-		err := s.limiter.Wait(ctx)
+		// Only wait for rate limiter if we're not in initial fetch mode
+		if !s.initialFetch {
+			err := s.limiter.Wait(ctx)
+			if err != nil {
+				return opencdc.Record{}, err
+			}
+		}
+
+		// Fill buffer with new records
+		err := s.fillBuffer(ctx)
 		if err != nil {
 			return opencdc.Record{}, err
 		}
 
-		// Fill buffer with new records
-		err = s.fillBuffer(ctx)
-		if err != nil {
-			return opencdc.Record{}, err
+		// After the first successful fetch, switch to monitoring mode
+		if s.initialFetch {
+			s.initialFetch = false
+		}
+
+		// If buffer is still empty after filling, return backoff retry
+		if len(s.buffer) == 0 {
+			return opencdc.Record{}, sdk.ErrBackoffRetry
 		}
 	}
 
@@ -255,7 +283,15 @@ func (s *Source) fillBuffer(ctx context.Context) error {
 	}
 
 	// Convert entries to OpenCDC records
+	newRecordsCount := 0
 	for i, entry := range feed.Entries {
+		arxivID := extractArxivID(entry.ID)
+
+		// Skip if we've already seen this paper
+		if s.seenPaperIDs[arxivID] {
+			continue
+		}
+
 		// Apply 24-hour filter if enabled
 		if s.config.FilterLast24Hours {
 			twentyFourHoursAgo := time.Now().UTC().Add(-24 * time.Hour)
@@ -264,12 +300,38 @@ func (s *Source) fillBuffer(ctx context.Context) error {
 			}
 		}
 
+		// Check if this paper is newer than our last seen date
+		// Use the most recent date between published and updated
+		paperDate := entry.Published
+		if entry.Updated.After(entry.Published) {
+			paperDate = entry.Updated
+		}
+
+		// Skip if this paper is older than our last seen date (unless initial fetch)
+		if !s.initialFetch && !s.lastSeenDate.IsZero() && !paperDate.After(s.lastSeenDate) {
+			continue
+		}
+
 		rec, err := s.entryToRecord(*entry, s.offset+i)
 		if err != nil {
 			return fmt.Errorf("failed to convert entry to record: %w", err)
 		}
+
+		// Mark this paper as seen and update our last seen date
+		s.seenPaperIDs[arxivID] = true
+		if paperDate.After(s.lastSeenDate) {
+			s.lastSeenDate = paperDate
+		}
+
 		s.buffer = append(s.buffer, rec)
+		newRecordsCount++
 	}
+
+	sdk.Logger(ctx).Debug().
+		Int("total_entries", len(feed.Entries)).
+		Int("new_records", newRecordsCount).
+		Time("last_seen_date", s.lastSeenDate).
+		Msg("processed arXiv entries")
 
 	// Update offset for next request
 	s.offset += len(feed.Entries)
